@@ -1,19 +1,10 @@
-﻿using Microsoft.Azure.KeyVault;
+using System;
 using System.Security.Cryptography.X509Certificates;
+
+using Azure.Core;
+
 
 namespace OpenVsixSignTool
 {
-    public class AzureKeyVaultMaterializedConfiguration
-    {
-        public AzureKeyVaultMaterializedConfiguration(KeyVaultClient client, X509Certificate2 publicCertificate, KeyIdentifier keyId)
-        {
-            Client = client;
-            KeyId = keyId;
-            PublicCertificate = publicCertificate;
-        }
-
-        public X509Certificate2 PublicCertificate { get; }
-        public KeyVaultClient Client { get; }
-        public KeyIdentifier KeyId { get; }
-    }
+    public sealed record AzureKeyVaultMaterializedConfiguration(TokenCredential TokenCredential, X509Certificate2 PublicCertificate, Uri KeyId);
 }

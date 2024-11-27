@@ -1,4 +1,5 @@
-﻿using Microsoft.Azure.KeyVault;
+﻿using Azure.Core;
+using Azure.Security.KeyVault.Keys.Cryptography;
 using Microsoft.Extensions.CommandLineUtils;
 using OpenVsixSignTool.Core;
 using System;
@@ -116,28 +117,50 @@ namespace OpenVsixSignTool
         }
 
         internal async Task<int> SignAzure(CommandOption azureKeyVaultUrl, CommandOption azureKeyVaultClientId,
-            CommandOption azureKeyVaultClientSecret, CommandOption azureKeyVaultCertificateName, CommandOption azureKeyVaultAccessToken, CommandOption force,
-            CommandOption fileDigest, CommandOption timestampUrl, CommandOption timestampAlgorithm, CommandArgument vsixPath)
+            CommandOption azureKeyVaultClientSecret, CommandOption azureKeyVaultTenantId,
+            CommandOption azureKeyVaultCertificateName, CommandOption azureKeyVaultCertificateVersion,
+            CommandOption azureKeyVaultAccessToken, CommandOption azureKeyVaultManagedIdentity,
+            CommandOption azureAuthority, CommandOption force, CommandOption fileDigest,
+            CommandOption timestampUrl, CommandOption timestampAlgorithm, CommandArgument vsixPath)
         {
+            Uri keyVaultUrl = null;
             if (!azureKeyVaultUrl.HasValue())
             {
                 _signCommandApplication.Out.WriteLine("The Azure Key Vault URL must be specified for Azure signing.");
                 return EXIT_CODES.INVALID_OPTIONS;
             }
-
+            else
+            {
+                if (!Uri.TryCreate(azureKeyVaultUrl.Value(), UriKind.Absolute, out keyVaultUrl))
+                {
+                    _signCommandApplication.Out.WriteLine("The Azure Key Vault URL is invalid.");
+                    return EXIT_CODES.FAILED;
+                }
+                if (keyVaultUrl.Scheme != Uri.UriSchemeHttp && keyVaultUrl.Scheme != Uri.UriSchemeHttps)
+                {
+                    _signCommandApplication.Out.WriteLine("Specified Azure Key Vault URL is invalid.");
+                    return EXIT_CODES.FAILED;
+                }
+            }
 
             // we only need the client id/secret if we don't have an access token
-            if (!azureKeyVaultAccessToken.HasValue())
+            if ((!azureKeyVaultManagedIdentity.HasValue()) && (!azureKeyVaultAccessToken.HasValue()) && (!azureKeyVaultClientId.HasValue()))
             {
-                if (!azureKeyVaultClientId.HasValue())
+                _signCommandApplication.Out.WriteLine("The Azure Key Vault ManagedIdentity, Client ID or Access Token must be specified for Azure signing.");
+                return EXIT_CODES.INVALID_OPTIONS;
+            }
+
+            if (azureKeyVaultClientId.HasValue())
+            {
+                if (!azureKeyVaultClientSecret.HasValue())
                 {
-                    _signCommandApplication.Out.WriteLine("The Azure Key Vault Client ID or Access Token must be specified for Azure signing.");
+                    _signCommandApplication.Out.WriteLine("The Azure Key Vault Client Secret must be specified if Client ID is specified for Azure signing.");
                     return EXIT_CODES.INVALID_OPTIONS;
                 }
 
-                if (!azureKeyVaultClientSecret.HasValue())
+                if (!azureKeyVaultTenantId.HasValue())
                 {
-                    _signCommandApplication.Out.WriteLine("The Azure Key Vault Client Secret or Access Token must be specified for Azure signing.");
+                    _signCommandApplication.Out.WriteLine("The Azure Key Vault Tenant ID must be specified if ClientID is specified for Azure signing.");
                     return EXIT_CODES.INVALID_OPTIONS;
                 }
             }
@@ -147,6 +170,7 @@ namespace OpenVsixSignTool
                 _signCommandApplication.Out.WriteLine("The Azure Key Vault Client Certificate Name must be specified for Azure signing.");
                 return EXIT_CODES.INVALID_OPTIONS;
             }
+
             Uri timestampServer = null;
             if (timestampUrl.HasValue())
             {
@@ -190,11 +214,15 @@ namespace OpenVsixSignTool
             }
             var configuration = new AzureKeyVaultSignConfigurationSet
             {
-                AzureKeyVaultUrl = azureKeyVaultUrl.Value(),
+                AzureKeyVaultUrl = new Uri(azureKeyVaultUrl.Value()),
                 AzureKeyVaultCertificateName = azureKeyVaultCertificateName.Value(),
+                AzureKeyVaultCertificateVersion = azureKeyVaultCertificateVersion.Value(),
                 AzureClientId = azureKeyVaultClientId.Value(),
+                AzureTenantId = azureKeyVaultTenantId.Value(),
                 AzureAccessToken = azureKeyVaultAccessToken.Value(),
                 AzureClientSecret = azureKeyVaultClientSecret.Value(),
+                ManagedIdentity = azureKeyVaultManagedIdentity.HasValue(),
+                AzureAuthority = azureAuthority.Value()
             };
 
             var configurationDiscoverer = new KeyVaultConfigurationDiscoverer();
@@ -209,8 +237,28 @@ namespace OpenVsixSignTool
                     _signCommandApplication.Out.WriteLine("Failed to get configuration from Azure Key Vault.");
                     return EXIT_CODES.FAILED;
             }
-            var context = new KeyVaultContext(materialized.Client, materialized.KeyId, materialized.PublicCertificate);
-            using (var keyVault = new RSAKeyVault(context))
+
+            const string RsaOid = "1.2.840.113549.1.1.1";
+            if (materialized.PublicCertificate.GetKeyAlgorithm() is string alg and not RsaOid)
+            {
+                _signCommandApplication.Out.WriteLine("Certificate algorithm is not RSA.");
+                return EXIT_CODES.FAILED;
+            }
+
+            CryptographyClientOptions clientOptions = new()
+            {
+                Retry =
+                    {
+                        Delay = TimeSpan.FromSeconds(2),
+                        MaxDelay = TimeSpan.FromSeconds(16),
+                        MaxRetries = 5,
+                        Mode = RetryMode.Exponential
+                    }
+            };
+
+            var client = new CryptographyClient(materialized.KeyId, materialized.TokenCredential, clientOptions);
+
+            using (var keyVault = await client.CreateRSAAsync())
             {
                 return await PerformSignOnVsixAsync(
                     vsixPathValue,

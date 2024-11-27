@@ -23,8 +23,12 @@ namespace OpenVsixSignTool
                     var azureKeyVaultUrl = signConfiguration.Option("-kvu | --azure-key-vault-url", "The URL to an Azure Key Vault.", CommandOptionType.SingleValue);
                     var azureKeyVaultClientId = signConfiguration.Option("-kvi | --azure-key-vault-client-id", "The Client ID to authenticate to the Azure Key Vault.", CommandOptionType.SingleValue);
                     var azureKeyVaultClientSecret = signConfiguration.Option("-kvs | --azure-key-vault-client-secret", "The Client Secret to authenticate to the Azure Key Vault.", CommandOptionType.SingleValue);
+                    var azureKeyVaultTenantId = signConfiguration.Option("-kvt | --azure-key-vault-tenant-id", "The Tenant Id to authenticate to the Azure Key Vault.", CommandOptionType.SingleValue);
                     var azureKeyVaultCertificateName = signConfiguration.Option("-kvc | --azure-key-vault-certificate", "The name of the certificate in Azure Key Vault.", CommandOptionType.SingleValue);
+                    var azureKeyVaultCertificateVersion = signConfiguration.Option("-kvcv | --azure-key-vault-certificate-version", "The version of the certificate in Azure Key Vault to use. The current version of the certificate is used by default.", CommandOptionType.SingleValue);
                     var azureKeyVaultAccessToken = signConfiguration.Option("-kva | --azure-key-vault-accesstoken", "The Access Token to authenticate to the Azure Key Vault.", CommandOptionType.SingleValue);
+                    var azureKeyVaultManagedIdentity = signConfiguration.Option("-kvm | --azure-key-vault-managed-identity", "Use the current Azure managed identity.", CommandOptionType.SingleValue);
+                    var azureAuthority = signConfiguration.Option("-au | --azure-authority", "The Azure Authority for Azure Key Vault.", CommandOptionType.SingleValue);
 
                     signConfiguration.OnExecute(() =>
                     {
@@ -35,8 +39,9 @@ namespace OpenVsixSignTool
                         }
                         else
                         {
-                            return sign.SignAzure(azureKeyVaultUrl, azureKeyVaultClientId, azureKeyVaultClientSecret,
-                                azureKeyVaultCertificateName, azureKeyVaultAccessToken, force, fileDigest, timestamp, timestampAlgorithm, file);
+                            return sign.SignAzure(azureKeyVaultUrl, azureKeyVaultClientId, azureKeyVaultClientSecret, azureKeyVaultTenantId,
+                                azureKeyVaultCertificateName, azureKeyVaultCertificateVersion, azureKeyVaultAccessToken, azureKeyVaultManagedIdentity,
+                                azureAuthority, force, fileDigest, timestamp, timestampAlgorithm, file);
                         }
                     });
                 }

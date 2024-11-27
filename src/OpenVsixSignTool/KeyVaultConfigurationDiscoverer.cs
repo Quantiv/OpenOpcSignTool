@@ -1,5 +1,7 @@
-﻿using Microsoft.Azure.KeyVault;
-using Microsoft.IdentityModel.Clients.ActiveDirectory;
+using Azure.Core;
+using Azure.Identity;
+using Azure.Security.KeyVault.Certificates;
+using System;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 
@@ -9,34 +11,60 @@ namespace OpenVsixSignTool
     {
         public async Task<ErrorOr<AzureKeyVaultMaterializedConfiguration>> Materialize(AzureKeyVaultSignConfigurationSet configuration)
         {
-            async Task<string> Authenticate(string authority, string resource, string scope)
+            TokenCredential credential;
+            if (configuration.ManagedIdentity)
             {
-                if (!string.IsNullOrWhiteSpace(configuration.AzureAccessToken))
+                credential = new DefaultAzureCredential();
+            }
+            else if(!string.IsNullOrWhiteSpace(configuration.AzureAccessToken))
+            {
+                credential = new AccessTokenCredential(configuration.AzureAccessToken);
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(configuration.AzureAuthority))
                 {
-                    return configuration.AzureAccessToken;
+                    credential = new ClientSecretCredential(configuration.AzureTenantId, configuration.AzureClientId, configuration.AzureClientSecret);
                 }
-
-                var context = new AuthenticationContext(authority);
-                ClientCredential credential = new ClientCredential(configuration.AzureClientId, configuration.AzureClientSecret);
-
-                try
+                else
                 {
-                    var result = await context.AcquireTokenAsync(resource, credential);
-                    return result.AccessToken;
-                }
-                catch (AdalServiceException e) when (e.StatusCode >= 400 && e.StatusCode < 500)
-                {
-                    return null;
+                    ClientSecretCredentialOptions options = new()
+                    {
+                        AuthorityHost = AuthorityHostNames.GetUriForAzureAuthorityIdentifier(configuration.AzureAuthority)
+                    };
+                    credential = new ClientSecretCredential(configuration.AzureTenantId, configuration.AzureClientId, configuration.AzureClientSecret, options);
                 }
             }
 
-            var vault = new KeyVaultClient(Authenticate);
-            var azureCertificate = await vault.GetCertificateAsync(configuration.AzureKeyVaultUrl, configuration.AzureKeyVaultCertificateName);
-                
-            var certificate = new X509Certificate2(azureCertificate.Cer);
-            var keyId = azureCertificate.KeyIdentifier;
-            return new AzureKeyVaultMaterializedConfiguration(vault, certificate, keyId);
+            X509Certificate2 certificate;
+            KeyVaultCertificate azureCertificate;
+            try
+            {
+                var certClient = new CertificateClient(configuration.AzureKeyVaultUrl, credential);
 
+                if (!string.IsNullOrWhiteSpace(configuration.AzureKeyVaultCertificateVersion))
+                {
+                    azureCertificate = (await certClient.GetCertificateVersionAsync(configuration.AzureKeyVaultCertificateName, configuration.AzureKeyVaultCertificateVersion).ConfigureAwait(false)).Value;
+                }
+                else
+                {
+                    azureCertificate = (await certClient.GetCertificateAsync(configuration.AzureKeyVaultCertificateName).ConfigureAwait(false)).Value;
+                }
+
+                certificate = new X509Certificate2(azureCertificate.Cer);
+            }
+            catch (Exception e)
+            {
+                return e;
+            }
+            var keyId = azureCertificate.KeyId;
+
+            if (keyId is null)
+            {
+                return new InvalidOperationException("The Azure certificate does not have an associated private key.");
+            }
+
+            return new AzureKeyVaultMaterializedConfiguration(credential, certificate, keyId);
         }
     }
 }
