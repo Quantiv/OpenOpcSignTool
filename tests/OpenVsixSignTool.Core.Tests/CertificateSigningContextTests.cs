@@ -1,5 +1,4 @@
-﻿using System.Collections.Generic;
-using System.IO;
+﻿using System.IO;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Xunit;
@@ -10,12 +9,15 @@ namespace OpenVsixSignTool.Core.Tests
     {
         private static string CertPath(string str) => Path.Combine("certs", str);
 
-        public static IEnumerable<object[]> RsaCertificates
+        public static TheoryData<string> RsaCertificates
         {
             get
             {
-                yield return new object[] { CertPath("rsa-2048-sha256.pfx") };
-                yield return new object[] { CertPath("rsa-2048-sha1.pfx") };
+                return new TheoryData<string>
+                {
+                    CertPath("rsa-2048-sha256.pfx"),
+                    CertPath("rsa-2048-sha1.pfx")
+                };
             }
         }
 
@@ -23,7 +25,7 @@ namespace OpenVsixSignTool.Core.Tests
         [MemberData(nameof(RsaCertificates))]
         public void ShouldSignABlobOfDataWithRsaSha256(string pfxPath)
         {
-            var certificate = new X509Certificate2(pfxPath, "test");
+            var certificate = X509CertificateLoader.LoadPkcs12FromFile(pfxPath, "test");
             var config = new SignConfigurationSet
             (
                 publicCertificate: certificate,
@@ -49,7 +51,7 @@ namespace OpenVsixSignTool.Core.Tests
         [MemberData(nameof(RsaCertificates))]
         public void ShouldSignABlobOfDataWithRsaSha1(string pfxPath)
         {
-            var certificate = new X509Certificate2(pfxPath, "test");
+            var certificate = X509CertificateLoader.LoadPkcs12FromFile(pfxPath, "test");
             var config = new SignConfigurationSet
             (
                 publicCertificate: certificate,
@@ -74,7 +76,7 @@ namespace OpenVsixSignTool.Core.Tests
         [Fact]
         public void ShouldSignABlobOfDataWithEcdsaP256Sha256()
         {
-            var certificate = new X509Certificate2(CertPath("ecdsa-p256-sha256.pfx"), "test");
+            var certificate = X509CertificateLoader.LoadPkcs12FromFile(CertPath("ecdsa-p256-sha256.pfx"), "test");
             var config = new SignConfigurationSet
             (
                 publicCertificate: certificate,

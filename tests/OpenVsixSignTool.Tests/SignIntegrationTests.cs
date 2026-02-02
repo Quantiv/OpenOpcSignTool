@@ -72,75 +72,70 @@ namespace OpenVsixSignTool.Tests
             }
         }
 
-        public static IEnumerable<object[]> HandleValidCommandLineOptionsTheories
+        public static TheoryData<string[], string> HandleValidCommandLineOptionsTheories
         {
             get
             {
                 //Normal signature with PFX
-                yield return new object[]
+                return new TheoryData<string[], string>
                 {
-                    new[] {"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The signing operation is complete."
+                    {
+                        new []{"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The signing operation is complete."
+                    }
                 };
             }
         }
 
-        public static IEnumerable<object[]> HandleRepeatedCommandLineOptionsTheories
+        public static TheoryData<(string[] args, string expectedMessage, int expectedExitCode)[]> HandleRepeatedCommandLineOptionsTheories
         {
             get
             {
                 //Sign it once, then try signing it again without the force option.
-                yield return new object[]
+                return new TheoryData<(string[] args, string expectedMessage, int expectedExitCode)[]>
                 {
-                    new[]
                     {
-                        (new [] {"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The signing operation is complete.", 0),
-                        (new [] {"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The VSIX is already signed.", 2)
-                    }
-                };
-                //Sign it once, then try signing it again with the force option.
-                yield return new object[]
-                {
-                    new[]
+                        new []
+                        {
+                            (new []{"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The signing operation is complete.", 0),
+                            (new []{"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The VSIX is already signed.", 2)
+                        }
+                    },
                     {
-                        (new [] {"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The signing operation is complete.", 0),
-                        (new [] {"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test", "-f"}, "The signing operation is complete.", 0)
-                    }
-                };
-                //Sign it then unsign it
-                yield return new object[]
-                {
-                    new[]
+                        new []
+                        {
+                            (new []{"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The signing operation is complete.", 0),
+                            (new []{"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test", "-f"}, "The signing operation is complete.", 0)
+                        }
+                    },
                     {
-                        (new [] {"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The signing operation is complete.", 0),
-                        (new [] {"unsign" }, "The unsigning operation is complete.", 0)
+                        new []
+                        {
+                            (new []{"sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test"}, "The signing operation is complete.", 0),
+                            (new []{"unsign" }, "The unsigning operation is complete.", 0)
+                        }
                     }
                 };
             }
         }
 
-        public static IEnumerable<object[]> HandleInvalidCommandLineOptionsTheories
+        public static TheoryData<string[], int, string> HandleInvalidCommandLineOptionsTheories
         {
             get
             {
-                //Path to PFX does not exist.
-                yield return new object[]
+                return new TheoryData<string[], int, string>
                 {
-                    new [] { "sign", "-c", CertPath("idontexist.pfx"), "-p", "test" }, 1, "Specified PFX file does not exist."
-                };
-                //Only password specified.
-                yield return new object[]
-                {
-                    new[] { "sign", "-p", "blah" }, 1, "Either --sha1 or --certificate must be specified, but not both."
-                };
-                //Both SHA1 thumbprint and PFX were specified.
-                yield return new object[]
-                {
-                    new[] { "sign", "-c", "blah", "-s", "blah" }, 1, "Either --sha1 or --certificate must be specified, but not both."
-                };
-                //Invalid file digest algorithm
-                yield return new object[]
-                {
-                    new [] { "sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test", "-fd", "md2" }, 1, "Specified file digest algorithm is not supported."
+                    {
+                        new []{ "sign", "-c", CertPath("idontexist.pfx"), "-p", "test" }, 1, "Specified PFX file does not exist."
+                    },
+                    {
+                        new []{ "sign", "-p", "blah" }, 1, "Either --sha1 or --certificate must be specified, but not both."
+                    },
+                    {
+                        new []{ "sign", "-c", "blah", "-s", "blah" }, 1, "Either --sha1 or --certificate must be specified, but not both."
+                    },
+                    {
+                        new []{ "sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test", "-fd", "md2" }, 1, "Specified file digest algorithm is not supported."
+                    }
                 };
             }
         }

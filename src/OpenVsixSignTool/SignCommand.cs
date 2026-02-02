@@ -64,11 +64,11 @@ namespace OpenVsixSignTool
                 }
                 if (!password.HasValue())
                 {
-                    certificate = new X509Certificate2(pfxFilePath);
+                    certificate = X509CertificateLoader.LoadPkcs12FromFile(pfxFilePath, null);
                 }
                 else
                 {
-                    certificate = new X509Certificate2(pfxFilePath, password.Value());
+                    certificate = X509CertificateLoader.LoadPkcs12FromFile(pfxFilePath, password.Value());
                 }
             }
             Uri timestampServer = null;

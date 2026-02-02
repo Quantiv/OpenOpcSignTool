@@ -51,7 +51,7 @@ namespace OpenVsixSignTool
                     azureCertificate = (await certClient.GetCertificateAsync(configuration.AzureKeyVaultCertificateName).ConfigureAwait(false)).Value;
                 }
 
-                certificate = new X509Certificate2(azureCertificate.Cer);
+                certificate = X509CertificateLoader.LoadCertificate(azureCertificate.Cer);
             }
             catch (Exception e)
             {
