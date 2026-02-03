@@ -1,49 +1,51 @@
-﻿using System.IO;
-using Microsoft.Extensions.CommandLineUtils;
+﻿using System;
+using System.CommandLine;
+using System.IO;
 using OpenVsixSignTool.Core;
 
 namespace OpenVsixSignTool
 {
-    internal class UnsignCommand
+    internal static class UnsignCommand
     {
-        internal static class EXIT_CODES
+        public static Command Create()
         {
-            public const int SUCCESS = 0;
-            public const int INVALID_OPTIONS = 1;
-            public const int FAILED = 2;
-        }
+            var command = new Command("unsign", "Removes all signatures from a VSIX package.");
 
-        private readonly CommandLineApplication _unsignConfiguration;
-
-        public UnsignCommand(CommandLineApplication unsignConfiguration)
-        {
-            _unsignConfiguration = unsignConfiguration;
-        }
-
-        public int Unsign(CommandArgument vsixPath)
-        {
-            var vsixPathValue = vsixPath.Value;
-            if (!File.Exists(vsixPathValue))
+            var vsixFileArgument = new Argument<FileInfo>("vsixFile")
             {
-                _unsignConfiguration.Out.WriteLine("Specified file does not exist.");
-                return SignCommand.EXIT_CODES.INVALID_OPTIONS;
-            }
-            using (var package = OpcPackage.Open(vsixPathValue, OpcPackageFileMode.ReadWrite))
+                Description = "The VSIX file to sign.",
+                Arity = ArgumentArity.ExactlyOne
+            };
+            command.Arguments.Add(vsixFileArgument);
+
+            command.SetAction(parseResult =>
             {
-                var unsigned = false;
-                foreach (var signature in package.GetSignatures())
+                var vsixFile = parseResult.GetValue(vsixFileArgument);
+                var vsixFilePath = vsixFile.FullName;
+                if (!File.Exists(vsixFilePath))
                 {
-                    unsigned = true;
-                    signature.Remove();
+                    Console.Error.WriteLine("Specified VSIX file does not exist.");
+                    return 2;
                 }
-                if (!unsigned)
+                using (var package = OpcPackage.Open(vsixFilePath, OpcPackageFileMode.ReadWrite))
                 {
-                    _unsignConfiguration.Out.WriteLine("Specified VSIX is not signed.");
-                    return EXIT_CODES.FAILED;
+                    var unsigned = false;
+                    foreach (var signature in package.GetSignatures())
+                    {
+                        unsigned = true;
+                        signature.Remove();
+                    }
+                    if (!unsigned)
+                    {
+                        Console.Error.WriteLine("Specified VSIX is not signed.");
+                        return 2;
+                    }
+                    Console.Out.WriteLine("The unsigning operation is complete.");
+                    return 0;
                 }
-                _unsignConfiguration.Out.WriteLine("The unsigning operation is complete.");
-                return EXIT_CODES.SUCCESS;
-            }
+            });
+
+            return command;
         }
     }
 }

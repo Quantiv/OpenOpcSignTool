@@ -11,14 +11,22 @@ namespace OpenVsixSignTool.Tests
         private readonly TextWriter _writer;
         private readonly TextWriter _new;
 
+        private readonly TextWriter _errorWriter;
+        private readonly TextWriter _errorNew;
+
         public ConsoleIntercepter()
         {
             _writer = Console.Out;
             _new = new StringWriter();
             Console.SetOut(_new);
+            _errorWriter = Console.Error;
+            _errorNew = new StringWriter();
+            Console.SetError(_errorNew);
         }
 
         public string Content => _new.ToString();
+
+        public string ErrorContent => _errorNew.ToString();
 
         public void Dispose()
         {
@@ -41,7 +49,7 @@ namespace OpenVsixSignTool.Tests
             {
                 var shadow = ShadowCopyPackage(SamplePath("OpenVsixSignToolTest.vsix"));
                 Assert.Equal(expectedExitCode, Program.Main(args.Concat(new[] {shadow}).ToArray()));
-                Assert.Contains(expectedMessage, consoleWriter.Content);
+                Assert.Contains(expectedMessage, consoleWriter.ErrorContent);
             }
         }
 
@@ -67,7 +75,14 @@ namespace OpenVsixSignTool.Tests
                 using (var consoleWriter = new ConsoleIntercepter())
                 {
                     Assert.Equal(expectedExitCode, Program.Main(args.Concat(new[] {shadow}).ToArray()));
-                    Assert.Contains(expectedMessage, consoleWriter.Content);
+                    if (expectedExitCode == 0)
+                    {
+                        Assert.Contains(expectedMessage, consoleWriter.Content);
+                    }
+                    else
+                    {
+                        Assert.Contains(expectedMessage, consoleWriter.ErrorContent);
+                    }
                 }
             }
         }
@@ -128,10 +143,10 @@ namespace OpenVsixSignTool.Tests
                         new []{ "sign", "-c", CertPath("idontexist.pfx"), "-p", "test" }, 1, "Specified PFX file does not exist."
                     },
                     {
-                        new []{ "sign", "-p", "blah" }, 1, "Either --sha1 or --certificate must be specified, but not both."
+                        new []{ "sign", "-p", "blah" }, 1, "At least one of the options --sha1, --certificate or --azure-key-vault-url must be provided for signing."
                     },
                     {
-                        new []{ "sign", "-c", "blah", "-s", "blah" }, 1, "Either --sha1 or --certificate must be specified, but not both."
+                        new []{ "sign", "-c", "blah", "-s", "blah" }, 1, "Only one of the options --sha1, --certificate or --azure-key-vault-url can be provided for signing."
                     },
                     {
                         new []{ "sign", "-c", CertPath("rsa-2048-sha256.pfx"), "-p", "test", "-fd", "md2" }, 1, "Specified file digest algorithm is not supported."

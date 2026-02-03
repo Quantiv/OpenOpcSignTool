@@ -1,228 +1,404 @@
-﻿using Azure.Core;
-using Azure.Security.KeyVault.Keys.Cryptography;
-using Microsoft.Extensions.CommandLineUtils;
-using OpenVsixSignTool.Core;
-using System;
+﻿using System;
+using System.CommandLine;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
+using Azure.Core;
+using Azure.Security.KeyVault.Keys.Cryptography;
+using OpenVsixSignTool.Core;
 
 namespace OpenVsixSignTool
 {
-    class SignCommand
+    internal static class SignCommand
     {
-        internal static class EXIT_CODES
+        public static Command Create()
         {
-            public const int SUCCESS = 0;
-            public const int INVALID_OPTIONS = 1;
-            public const int FAILED = 2;
-        }
+            var command = new Command("sign", "Sign a VSIX package");
 
-        private readonly CommandLineApplication _signCommandApplication;
-
-        public SignCommand(CommandLineApplication signCommandApplication)
-        {
-            _signCommandApplication = signCommandApplication;
-        }
-
-        internal Task<int> SignAsync
-        (
-            CommandOption sha1,
-            CommandOption pfxPath,
-            CommandOption password,
-            CommandOption timestampUrl,
-            CommandOption timestampAlgorithm,
-            CommandOption fileDigest,
-            CommandOption force,
-            CommandArgument vsixPath)
-        {
-            if (!(sha1.HasValue() ^ pfxPath.HasValue()))
+            var vsixFileArgument = new Argument<FileInfo>("vsixFile")
             {
-                _signCommandApplication.Out.WriteLine("Either --sha1 or --certificate must be specified, but not both.");
-                _signCommandApplication.ShowHelp();
-                return Task.FromResult(EXIT_CODES.INVALID_OPTIONS);
-            }
-            X509Certificate2 certificate;
-            if (sha1.HasValue())
+                Description = "The VSIX file to sign.",
+                Arity = ArgumentArity.ExactlyOne
+            };
+            command.Arguments.Add(vsixFileArgument);
+
+            var sha1Option = new Option<string>("--sha1", "-s")
             {
-                certificate = GetCertificateFromCertificateStore(sha1.Value());
-                if (certificate == null)
+                Description = "A hex-encoded SHA-1 thumbprint of the certificate used to perform the signature.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(sha1Option);
+
+            var certificateOption = new Option<FileInfo>("--certificate", "-c")
+            {
+                Description = "A path to a PFX file to perform the signature.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(certificateOption);
+
+            var passwordOption = new Option<string>("--password", "-p")
+            {
+                Description = "The password for the PFX file.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(passwordOption);
+
+            var timestampOption = new Option<string>("--timestamp", "-t")
+            {
+                Description = "A URL of the timestamping server to timestamp the signature.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            timestampOption.Validators.Add(result =>
+            {
+                var value = result.GetValue(timestampOption);
+                if (ParseUri(result.GetValue(timestampOption)) == null)
                 {
-                    _signCommandApplication.Out.WriteLine("Unable to locate certificate by thumbprint.");
-                    return Task.FromResult(EXIT_CODES.FAILED);
+                    result.AddError("Specified timestamp URL is invalid.");
                 }
-            }
-            else
+            });
+            command.Options.Add(timestampOption);
+
+            var timestampAlgorithmOption = new Option<string>("--timestamp-algorithm", "-ta")
             {
-                var pfxFilePath = pfxPath.Value();
-                if (!File.Exists(pfxFilePath))
+                Description = "The digest algorithm of the timestamp.",
+                Arity = ArgumentArity.ZeroOrOne,
+                DefaultValueFactory = _ => "sha256"
+            };
+            timestampAlgorithmOption.Validators.Add(result =>
+            {
+                if (ParseHashAlgorithmName(result.GetValue(timestampAlgorithmOption)) == null)
                 {
-                    _signCommandApplication.Out.WriteAsync("Specified PFX file does not exist.");
-                    return Task.FromResult(EXIT_CODES.INVALID_OPTIONS);
+                    result.AddError("Specified timestamp digest algorithm is not supported.");
                 }
-                if (!password.HasValue())
+            });
+            command.Options.Add(timestampAlgorithmOption);
+
+            var fileDigestOption = new Option<string>("--file-digest", "-fd")
+            {
+                Description = "The digest algorithm to hash the VSIX file with.",
+                Arity = ArgumentArity.ZeroOrOne,
+                DefaultValueFactory = _ => "sha256"
+            };
+            fileDigestOption.Validators.Add(result =>
+            {
+                if (ParseHashAlgorithmName(result.GetValue(fileDigestOption)) == null)
                 {
-                    certificate = X509CertificateLoader.LoadPkcs12FromFile(pfxFilePath, null);
+                    result.AddError("Specified file digest algorithm is not supported.");
+                }
+            });
+            command.Options.Add(fileDigestOption);
+
+            var forceOption = new Option<bool>("--force", "-f")
+            {
+                Description = "Force the signature by overwriting any existing signatures.",
+            };
+            command.Options.Add(forceOption);
+
+            var azureKeyVaultUrlOption = new Option<string>("--azure-key-vault-url", "-kvu")
+            {
+                Description = "The URL to an Azure Key Vault.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            azureKeyVaultUrlOption.Validators.Add(result =>
+            {
+                if (ParseUri(result.GetValue(azureKeyVaultUrlOption)) == null)
+                {
+                    result.AddError("Specified Azure Key Vault URL is invalid.");
+                }
+            });
+            command.Options.Add(azureKeyVaultUrlOption);
+
+            var azureKeyVaultClientIdOption = new Option<string>("--azure-key-vault-client-id", "-kvi")
+            {
+                Description = "The Client ID to authenticate to the Azure Key Vault.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(azureKeyVaultClientIdOption);
+
+            var azureKeyVaultClientSecretOption = new Option<string>("--azure-key-vault-client-secret", "-kvs")
+            {
+                Description = "The Client Secret to authenticate to the Azure Key Vault.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(azureKeyVaultClientSecretOption);
+
+            var azureKeyVaultTenantIdOption = new Option<string>("--azure-key-vault-tenant-id", "-kvt")
+            {
+                Description = "The Tenant Id to authenticate to the Azure Key Vault.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(azureKeyVaultTenantIdOption);
+
+            var azureKeyVaultCertificateNameOption = new Option<string>("--azure-key-vault-certificate", "-kvc")
+            {
+                Description = "The name of the certificate in Azure Key Vault.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(azureKeyVaultCertificateNameOption);
+
+            var azureKeyVaultCertificateVersionOption = new Option<string>("--azure-key-vault-certificate-version", "-kvcv")
+            {
+                Description = "The version of the certificate in Azure Key Vault to use. The current version of the certificate is used by default.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(azureKeyVaultCertificateVersionOption);
+
+            var azureKeyVaultAccessTokenOption = new Option<string>("--azure-key-vault-accesstoken", "-kva")
+            {
+                Description = "The Access Token to authenticate to the Azure Key Vault.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(azureKeyVaultAccessTokenOption);
+
+            var azureKeyVaultManagedIdentityOption = new Option<bool>("--azure-key-vault-managed-identity", "-kvm")
+            {
+                Description = "Use the current Azure managed identity."
+            };
+            command.Options.Add(azureKeyVaultManagedIdentityOption);
+
+            var azureAuthorityOption = new Option<string>("--azure-authority", "-au")
+            {
+                Description = "The Azure Authority for Azure Key Vault.",
+                Arity = ArgumentArity.ZeroOrOne
+            };
+            command.Options.Add(azureAuthorityOption);
+
+            command.SetAction(async (parseResult, cancellationToken) =>
+            {
+                var vsixFile = parseResult.GetValue(vsixFileArgument);
+                var vsixFilePath = vsixFile.FullName;
+                if (!File.Exists(vsixFilePath))
+                {
+                    Console.Error.WriteLine("Specified VSIX file does not exist.");
+                    return 2;
+                }
+                var sha1 = parseResult.GetValue(sha1Option);
+                var certificate = parseResult.GetValue(certificateOption);
+                var azureKeyVaultUrl = parseResult.GetValue(azureKeyVaultUrlOption);
+                if ((sha1 == null) && (certificate == null) && (azureKeyVaultUrl == null))
+                {
+                    Console.Error.WriteLine("At least one of the options --sha1, --certificate or --azure-key-vault-url must be provided for signing.");
+                    return 1;
+                }
+                if (((sha1 != null) && (certificate != null)) || ((sha1 != null) && (azureKeyVaultUrl == null)) || ((certificate != null) && (azureKeyVaultUrl != null)))
+                {
+                    Console.Error.WriteLine("Only one of the options --sha1, --certificate or --azure-key-vault-url can be provided for signing.");
+                    return 1;
+                }
+                if ((sha1 != null) || (certificate != null))
+                {
+                    return await SignAsync
+                    (
+                        vsixFilePath,
+                        sha1,
+                        certificate?.FullName,
+                        parseResult.GetValue(passwordOption),
+                        parseResult.GetValue(timestampOption),
+                        parseResult.GetValue(timestampAlgorithmOption),
+                        parseResult.GetValue(fileDigestOption),
+                        parseResult.GetValue(forceOption)
+                    );
                 }
                 else
                 {
-                    certificate = X509CertificateLoader.LoadPkcs12FromFile(pfxFilePath, password.Value());
+                    return await SignAzureAsync
+                    (
+                        vsixFilePath,
+                        azureKeyVaultUrl,
+                        parseResult.GetValue(azureKeyVaultClientIdOption),
+                        parseResult.GetValue(azureKeyVaultClientSecretOption),
+                        parseResult.GetValue(azureKeyVaultTenantIdOption),
+                        parseResult.GetValue(azureKeyVaultCertificateNameOption),
+                        parseResult.GetValue(azureKeyVaultCertificateVersionOption),
+                        parseResult.GetValue(azureKeyVaultAccessTokenOption),
+                        parseResult.GetValue(azureKeyVaultManagedIdentityOption),
+                        parseResult.GetValue(azureAuthorityOption),
+                        parseResult.GetValue(forceOption),
+                        parseResult.GetValue(fileDigestOption),
+                        parseResult.GetValue(timestampOption),
+                        parseResult.GetValue(timestampAlgorithmOption)
+                    );
                 }
-            }
-            Uri timestampServer = null;
-            if (timestampUrl.HasValue())
-            {
-                if (!Uri.TryCreate(timestampUrl.Value(), UriKind.Absolute, out timestampServer))
-                {
-                    _signCommandApplication.Out.WriteLine("Specified timestamp URL is invalid.");
-                    return Task.FromResult(EXIT_CODES.FAILED);
-                }
-                if (timestampServer.Scheme != Uri.UriSchemeHttp && timestampServer.Scheme != Uri.UriSchemeHttps)
-                {
-                    _signCommandApplication.Out.WriteLine("Specified timestamp URL is invalid.");
-                    return Task.FromResult(EXIT_CODES.FAILED);
-                }
-            }
-            var vsixPathValue = vsixPath.Value;
-            if (!File.Exists(vsixPathValue))
-            {
-                _signCommandApplication.Out.WriteLine("Specified file does not exist.");
-                return Task.FromResult(EXIT_CODES.FAILED);
-            }
-            HashAlgorithmName fileDigestAlgorithm, timestampDigestAlgorithm;
-            var fileDigestResult = AlgorithmFromInput(fileDigest.HasValue() ? fileDigest.Value() : null);
-            if (fileDigestResult == null)
-            {
-                _signCommandApplication.Out.WriteLine("Specified file digest algorithm is not supported.");
-                return Task.FromResult(EXIT_CODES.INVALID_OPTIONS);
-            }
-            else
-            {
-                fileDigestAlgorithm = fileDigestResult.Value;
-            }
-            var timestampDigestResult = AlgorithmFromInput(timestampAlgorithm.HasValue() ? timestampAlgorithm.Value() : null);
-            if (timestampDigestResult == null)
-            {
-                _signCommandApplication.Out.WriteLine("Specified timestamp digest algorithm is not supported.");
-                return Task.FromResult(EXIT_CODES.INVALID_OPTIONS);
-            }
-            else
-            {
-                timestampDigestAlgorithm = timestampDigestResult.Value;
-            }
-            return PerformSignOnVsixAsync(vsixPathValue, force.HasValue(), timestampServer, fileDigestAlgorithm, timestampDigestAlgorithm,
-                certificate, GetSigningKeyFromCertificate(certificate));
+            });
+
+            return command;
         }
 
-        internal async Task<int> SignAzure(CommandOption azureKeyVaultUrl, CommandOption azureKeyVaultClientId,
-            CommandOption azureKeyVaultClientSecret, CommandOption azureKeyVaultTenantId,
-            CommandOption azureKeyVaultCertificateName, CommandOption azureKeyVaultCertificateVersion,
-            CommandOption azureKeyVaultAccessToken, CommandOption azureKeyVaultManagedIdentity,
-            CommandOption azureAuthority, CommandOption force, CommandOption fileDigest,
-            CommandOption timestampUrl, CommandOption timestampAlgorithm, CommandArgument vsixPath)
+        private static HashAlgorithmName? ParseHashAlgorithmName(string value)
         {
-            Uri keyVaultUrl = null;
-            if (!azureKeyVaultUrl.HasValue())
+            return (value?.ToLower()) switch
             {
-                _signCommandApplication.Out.WriteLine("The Azure Key Vault URL must be specified for Azure signing.");
-                return EXIT_CODES.INVALID_OPTIONS;
+                "sha1" => (HashAlgorithmName?)HashAlgorithmName.SHA1,
+                "sha256" => (HashAlgorithmName?)HashAlgorithmName.SHA256,
+                "sha384" => (HashAlgorithmName?)HashAlgorithmName.SHA384,
+                "sha512" => (HashAlgorithmName?)HashAlgorithmName.SHA512,
+                _ => null,
+            };
+        }
+
+        private static Uri ParseUri(string value)
+        {
+            if (value != null)
+            {
+                if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
+                {
+                    if ((uri.Scheme == Uri.UriSchemeHttp) || (uri.Scheme == Uri.UriSchemeHttps))
+                    {
+                        return uri;
+                    }
+                }
+            }
+            return null;
+        }
+
+        private static async ValueTask<int> SignAsync
+        (
+            string vsixFilePath,
+            string sha1,
+            string pfxFilePath,
+            string password,
+            string timestampUrl,
+            string timestampAlgorithm,
+            string fileDigest,
+            bool force
+        )
+        {
+            X509Certificate2 certificate;
+            if (sha1 != null)
+            {
+                certificate = GetCertificateFromCertificateStore(sha1);
+                if (certificate == null)
+                {
+                    Console.Error.WriteLine("Unable to locate certificate by thumbprint.");
+                    return 2;
+                }
             }
             else
             {
-                if (!Uri.TryCreate(azureKeyVaultUrl.Value(), UriKind.Absolute, out keyVaultUrl))
+                if (!File.Exists(pfxFilePath))
                 {
-                    _signCommandApplication.Out.WriteLine("The Azure Key Vault URL is invalid.");
-                    return EXIT_CODES.FAILED;
+                    Console.Error.WriteLine("Specified PFX file does not exist.");
+                    return 1;
                 }
-                if (keyVaultUrl.Scheme != Uri.UriSchemeHttp && keyVaultUrl.Scheme != Uri.UriSchemeHttps)
+                certificate = X509CertificateLoader.LoadPkcs12FromFile(pfxFilePath, password);
+            }
+            Uri timestampServer = null;
+            if (timestampUrl != null)
+            {
+                timestampServer = ParseUri(timestampUrl);
+                if (timestampServer == null)
                 {
-                    _signCommandApplication.Out.WriteLine("Specified Azure Key Vault URL is invalid.");
-                    return EXIT_CODES.FAILED;
+                    Console.Error.WriteLine("Specified timestamp URL is invalid.");
+                    return 2;
                 }
             }
-
-            // we only need the client id/secret if we don't have an access token
-            if ((!azureKeyVaultManagedIdentity.HasValue()) && (!azureKeyVaultAccessToken.HasValue()) && (!azureKeyVaultClientId.HasValue()))
+            var fileDigestAlgorithm = ParseHashAlgorithmName(fileDigest);
+            if (!fileDigestAlgorithm.HasValue)
             {
-                _signCommandApplication.Out.WriteLine("The Azure Key Vault ManagedIdentity, Client ID or Access Token must be specified for Azure signing.");
-                return EXIT_CODES.INVALID_OPTIONS;
+                Console.Error.WriteLine("Specified file digest algorithm is not supported.");
+                return 1;
             }
-
-            if (azureKeyVaultClientId.HasValue())
+            var timestampDigestAlgorithm = ParseHashAlgorithmName(timestampAlgorithm);
+            if (!timestampDigestAlgorithm.HasValue)
             {
-                if (!azureKeyVaultClientSecret.HasValue())
-                {
-                    _signCommandApplication.Out.WriteLine("The Azure Key Vault Client Secret must be specified if Client ID is specified for Azure signing.");
-                    return EXIT_CODES.INVALID_OPTIONS;
-                }
+                Console.Error.WriteLine("Specified timestamp digest algorithm is not supported.");
+                return 1;
+            }
+            return await PerformSignOnVsixAsync
+            (
+                vsixFilePath,
+                force,
+                timestampServer,
+                fileDigestAlgorithm.Value,
+                timestampDigestAlgorithm.Value,
+                certificate,
+                GetSigningKeyFromCertificate(certificate)
+            );
+        }
 
-                if (!azureKeyVaultTenantId.HasValue())
+        private static async ValueTask<int> SignAzureAsync
+        (
+            string vsixFilePath,
+            string azureKeyVaultUrl,
+            string azureKeyVaultClientId,
+            string azureKeyVaultClientSecret,
+            string azureKeyVaultTenantId,
+            string azureKeyVaultCertificateName,
+            string azureKeyVaultCertificateVersion,
+            string azureKeyVaultAccessToken,
+            bool azureKeyVaultManagedIdentity,
+            string azureAuthority,
+            bool force, 
+            string fileDigest,
+            string timestampUrl, 
+            string timestampAlgorithm
+        )
+        {
+            var keyVaultUrl = ParseUri(azureKeyVaultUrl);
+            if (keyVaultUrl == null)
+            {
+                Console.Error.WriteLine("The specified Azure Key Vault URL is invalid.");
+            }
+            if ((!azureKeyVaultManagedIdentity) && (azureKeyVaultAccessToken == null) && (azureKeyVaultClientId == null))
+            {
+                Console.Error.WriteLine("At least one of --azure-key-vault-managed-identity, --azure-key-vault-accesstoken or --azure-key-vault-client-id must be specified for Azure signing.");
+                return 1;
+            }
+            if (azureKeyVaultClientId != null)
+            {
+                if (azureKeyVaultClientSecret == null)
                 {
-                    _signCommandApplication.Out.WriteLine("The Azure Key Vault Tenant ID must be specified if ClientID is specified for Azure signing.");
-                    return EXIT_CODES.INVALID_OPTIONS;
+                    Console.Error.WriteLine("--azure-key-vault-client-secret must be specified if --azure-key-vault-client-id is specified for Azure signing.");
+                    return 1;
+                }
+                if (azureKeyVaultTenantId == null)
+                {
+                    Console.Error.WriteLine("--azure-key-vault-tenant-id must be specified if --azure-key-vault-client-id is specified for Azure signing.");
+                    return 1;
                 }
             }
-
-            if (!azureKeyVaultCertificateName.HasValue())
+            if (azureKeyVaultCertificateName == null)
             {
-                _signCommandApplication.Out.WriteLine("The Azure Key Vault Client Certificate Name must be specified for Azure signing.");
-                return EXIT_CODES.INVALID_OPTIONS;
+                Console.Error.WriteLine("--azure-key-vault-certificate must be specified for Azure signing.");
+                return 1;
             }
 
             Uri timestampServer = null;
-            if (timestampUrl.HasValue())
+            if (timestampUrl != null)
             {
-                if (!Uri.TryCreate(timestampUrl.Value(), UriKind.Absolute, out timestampServer))
+                timestampServer = ParseUri(timestampUrl);
+                if (timestampServer == null)
                 {
-                    _signCommandApplication.Out.WriteLine("Specified timestamp URL is invalid.");
-                    return EXIT_CODES.FAILED;
-                }
-                if (timestampServer.Scheme != Uri.UriSchemeHttp && timestampServer.Scheme != Uri.UriSchemeHttps)
-                {
-                    _signCommandApplication.Out.WriteLine("Specified timestamp URL is invalid.");
-                    return EXIT_CODES.FAILED;
+                    Console.Error.WriteLine("Specified timestamp URL is invalid.");
+                    return 2;
                 }
             }
-            var vsixPathValue = vsixPath.Value;
-            if (!File.Exists(vsixPathValue))
+            var fileDigestAlgorithm = ParseHashAlgorithmName(fileDigest);
+            if (!fileDigestAlgorithm.HasValue)
             {
-                _signCommandApplication.Out.WriteLine("Specified file does not exist.");
-                return EXIT_CODES.FAILED;
+                Console.Error.WriteLine("Specified file digest algorithm is not supported.");
+                return 1;
             }
-            HashAlgorithmName fileDigestAlgorithm, timestampDigestAlgorithm;
-            var fileDigestResult = AlgorithmFromInput(fileDigest.HasValue() ? fileDigest.Value() : null);
-            if (fileDigestResult == null)
+            var timestampDigestAlgorithm = ParseHashAlgorithmName(timestampAlgorithm);
+            if (!timestampDigestAlgorithm.HasValue)
             {
-                _signCommandApplication.Out.WriteLine("Specified file digest algorithm is not supported.");
-                return EXIT_CODES.INVALID_OPTIONS;
+                Console.Error.WriteLine("Specified timestamp digest algorithm is not supported.");
+                return 1;
             }
-            else
-            {
-                fileDigestAlgorithm = fileDigestResult.Value;
-            }
-            var timestampDigestResult = AlgorithmFromInput(timestampAlgorithm.HasValue() ? timestampAlgorithm.Value() : null);
-            if (timestampDigestResult == null)
-            {
-                _signCommandApplication.Out.WriteLine("Specified timestamp digest algorithm is not supported.");
-                return EXIT_CODES.INVALID_OPTIONS;
-            }
-            else
-            {
-                timestampDigestAlgorithm = timestampDigestResult.Value;
-            }
+
             var configuration = new AzureKeyVaultSignConfigurationSet
             {
-                AzureKeyVaultUrl = new Uri(azureKeyVaultUrl.Value()),
-                AzureKeyVaultCertificateName = azureKeyVaultCertificateName.Value(),
-                AzureKeyVaultCertificateVersion = azureKeyVaultCertificateVersion.Value(),
-                AzureClientId = azureKeyVaultClientId.Value(),
-                AzureTenantId = azureKeyVaultTenantId.Value(),
-                AzureAccessToken = azureKeyVaultAccessToken.Value(),
-                AzureClientSecret = azureKeyVaultClientSecret.Value(),
-                ManagedIdentity = azureKeyVaultManagedIdentity.HasValue(),
-                AzureAuthority = azureAuthority.Value()
+                AzureKeyVaultUrl = keyVaultUrl,
+                AzureKeyVaultCertificateName = azureKeyVaultCertificateName,
+                AzureKeyVaultCertificateVersion = azureKeyVaultCertificateVersion,
+                AzureClientId = azureKeyVaultClientId,
+                AzureTenantId = azureKeyVaultTenantId,
+                AzureAccessToken = azureKeyVaultAccessToken,
+                AzureClientSecret = azureKeyVaultClientSecret,
+                ManagedIdentity = azureKeyVaultManagedIdentity,
+                AzureAuthority = azureAuthority
             };
 
             var configurationDiscoverer = new KeyVaultConfigurationDiscoverer();
@@ -234,15 +410,15 @@ namespace OpenVsixSignTool
                     materialized = ok.Value;
                     break;
                 default:
-                    _signCommandApplication.Out.WriteLine("Failed to get configuration from Azure Key Vault.");
-                    return EXIT_CODES.FAILED;
+                    Console.Error.WriteLine("Failed to get configuration from Azure Key Vault.");
+                    return 2;
             }
 
             const string RsaOid = "1.2.840.113549.1.1.1";
             if (materialized.PublicCertificate.GetKeyAlgorithm() is string alg and not RsaOid)
             {
-                _signCommandApplication.Out.WriteLine("Certificate algorithm is not RSA.");
-                return EXIT_CODES.FAILED;
+                Console.Error.WriteLine("Certificate algorithm is not RSA.");
+                return 2;
             }
 
             CryptographyClientOptions clientOptions = new()
@@ -261,70 +437,37 @@ namespace OpenVsixSignTool
             using (var keyVault = await client.CreateRSAAsync())
             {
                 return await PerformSignOnVsixAsync(
-                    vsixPathValue,
-                    force.HasValue(),
+                    vsixFilePath,
+                    force,
                     timestampServer,
-                    fileDigestAlgorithm,
-                    timestampDigestAlgorithm,
+                    fileDigestAlgorithm.Value,
+                    timestampDigestAlgorithm.Value,
                     materialized.PublicCertificate,
                     keyVault
                 );
             }
         }
 
-        private async Task<int> PerformSignOnVsixAsync(string vsixPath, bool force,
-            Uri timestampUri, HashAlgorithmName fileDigestAlgorithm, HashAlgorithmName timestampDigestAlgorithm,
-            X509Certificate2 certificate, AsymmetricAlgorithm signingKey
-            )
+        private static X509Certificate2 GetCertificateFromCertificateStore(string sha1)
         {
-            using (var package = OpcPackage.Open(vsixPath, OpcPackageFileMode.ReadWrite))
+            using (var store = new X509Store(StoreName.My, StoreLocation.LocalMachine))
             {
-                if (package.GetSignatures().Any() && !force)
+                store.Open(OpenFlags.OpenExistingOnly | OpenFlags.ReadOnly);
+                var certificates = store.Certificates.Find(X509FindType.FindByThumbprint, sha1, false);
+                if (certificates.Count > 0)
                 {
-                    _signCommandApplication.Out.WriteLine("The VSIX is already signed.");
-                    return EXIT_CODES.FAILED;
+                    return certificates[0];
                 }
-                var signBuilder = package.CreateSignatureBuilder();
-                signBuilder.EnqueueNamedPreset<VSIXSignatureBuilderPreset>();
-                var signingConfiguration = new SignConfigurationSet
-                (
-                    fileDigestAlgorithm: fileDigestAlgorithm,
-                    signatureDigestAlgorithm: fileDigestAlgorithm,
-                    publicCertificate: certificate,
-                    signingKey: signingKey
-                );
-
-                var signature = signBuilder.Sign(signingConfiguration);
-                if (timestampUri != null)
-                {
-                    var timestampBuilder = signature.CreateTimestampBuilder();
-                    var result = await timestampBuilder.SignAsync(timestampUri, timestampDigestAlgorithm);
-                    if (result == TimestampResult.Failed)
-                    {
-                        return EXIT_CODES.FAILED;
-                    }
-                }
-                _signCommandApplication.Out.WriteLine("The signing operation is complete.");
-                return EXIT_CODES.SUCCESS;
             }
-        }
-
-        private static HashAlgorithmName? AlgorithmFromInput(string value)
-        {
-            switch (value?.ToLower())
+            using (var store = new X509Store(StoreName.My, StoreLocation.CurrentUser))
             {
-                case "sha1":
-                    return HashAlgorithmName.SHA1;
-                case "sha384":
-                    return HashAlgorithmName.SHA384;
-                case "sha512":
-                    return HashAlgorithmName.SHA512;
-                case null:
-                case "sha256":
-                    return HashAlgorithmName.SHA256;
-                default:
+                store.Open(OpenFlags.OpenExistingOnly | OpenFlags.ReadOnly);
+                var certificates = store.Certificates.Find(X509FindType.FindByThumbprint, sha1, false);
+                if (certificates.Count == 0)
+                {
                     return null;
-
+                }
+                return certificates[0];
             }
         }
 
@@ -344,29 +487,47 @@ namespace OpenVsixSignTool
             }
         }
 
-        private static X509Certificate2 GetCertificateFromCertificateStore(string sha1)
+        private static async ValueTask<int> PerformSignOnVsixAsync
+        (
+            string vsixPath,
+            bool force,
+            Uri timestampUri,
+            HashAlgorithmName fileDigestAlgorithm,
+            HashAlgorithmName timestampDigestAlgorithm,
+            X509Certificate2 certificate,
+            AsymmetricAlgorithm signingKey
+        )
         {
-            using (var store = new X509Store(StoreName.My, StoreLocation.LocalMachine))
+            using (var package = OpcPackage.Open(vsixPath, OpcPackageFileMode.ReadWrite))
             {
-                store.Open(OpenFlags.OpenExistingOnly | OpenFlags.ReadOnly);
-                var certificates = store.Certificates.Find(X509FindType.FindByThumbprint, sha1, false);
-                if (certificates.Count > 0)
+                if (package.GetSignatures().Any() && !force)
                 {
-                    return certificates[0];
+                    Console.Error.WriteLine("The VSIX is already signed.");
+                    return 2;
                 }
-            }
-
-            using (var store = new X509Store(StoreName.My, StoreLocation.CurrentUser))
-            {
-                store.Open(OpenFlags.OpenExistingOnly | OpenFlags.ReadOnly);
-                var certificates = store.Certificates.Find(X509FindType.FindByThumbprint, sha1, false);
-                if (certificates.Count == 0)
+                var signBuilder = package.CreateSignatureBuilder();
+                signBuilder.EnqueueNamedPreset<VSIXSignatureBuilderPreset>();
+                var signingConfiguration = new SignConfigurationSet
+                (
+                    fileDigestAlgorithm: fileDigestAlgorithm,
+                    signatureDigestAlgorithm: fileDigestAlgorithm,
+                    publicCertificate: certificate,
+                    signingKey: signingKey
+                );
+                var signature = signBuilder.Sign(signingConfiguration);
+                if (timestampUri != null)
                 {
-                    return null;
+                    var timestampBuilder = signature.CreateTimestampBuilder();
+                    var result = await timestampBuilder.SignAsync(timestampUri, timestampDigestAlgorithm);
+                    if (result == TimestampResult.Failed)
+                    {
+                        Console.Error.WriteLine("The time stamp failed.");
+                        return 2;
+                    }
                 }
-                return certificates[0];
+                Console.Out.WriteLine("The signing operation is complete.");
+                return 0;
             }
-
         }
     }
 }
