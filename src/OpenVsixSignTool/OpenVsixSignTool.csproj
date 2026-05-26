@@ -16,12 +16,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Azure.Identity" Version="1.17.1" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Security.KeyVault.Certificates" Version="4.8.0" />
-    <PackageReference Include="Azure.Security.KeyVault.Keys" Version="4.8.0" />
-    <PackageReference Include="Microsoft.Identity.Client" Version="4.82.0" />
+    <PackageReference Include="Azure.Security.KeyVault.Keys" Version="4.10.0" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.84.1" />
     <PackageReference Include="RSAKeyVaultProvider" Version="2.1.1" />
-    <PackageReference Include="System.CommandLine" Version="2.0.2" />
+    <PackageReference Include="System.CommandLine" Version="2.0.8" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpenVsixSignTool.Core\OpenVsixSignTool.Core.csproj" />
